@@ -1,4 +1,3 @@
-
 import sys
 import cv2
 import keras_ocr
@@ -153,9 +152,8 @@ def init(texts):
 
     data = calc_dist_btw_boxes(data)
     return data
-
-
-def bb_to_text(predictions):
+	
+def bb_to_text(predictions, correction):
     data = init(predictions)
     nodes = [data[x]['key'] for x in data]
     links = search_links_btw_word(data)
@@ -172,6 +170,9 @@ def bb_to_text(predictions):
     for l in lines:
         phrase = []
         for ll in l:
+          if correction == True:
             phrase.append(spell.correction(data[ll]['text']))
+          else:
+            phrase.append(data[ll]['text'])
         text.append(phrase)
     return text
