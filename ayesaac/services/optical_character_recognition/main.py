@@ -2,6 +2,7 @@ from pprint import pprint
 
 import keras_ocr
 import numpy as np
+from spellchecker import SpellChecker
 
 import matplotlib
 
@@ -10,6 +11,7 @@ from ayesaac.services.common.crypter import decode
 from ayesaac.utils.logger import get_logger
 
 from .bounding_box_to_phrases import bb_to_text
+from .skew_correction import get_logger
 
 try:
     from PIL import Image
@@ -17,8 +19,8 @@ except ImportError:
     import Image
 import pytesseract
 
-
 logger = get_logger(__file__)
+
 
 class OCR(object):
     """
@@ -34,37 +36,71 @@ class OCR(object):
 
 
     if (default_ocr_model == "keras-ocr"):
-        def __init__(self):
-            self.queue_manager = QueueManager([self.__class__.__name__, "Interpreter"])
-            self.pipeline = keras_ocr.pipeline.Pipeline()
 
-        def callback(self, body, **_):
-            image = [
-                decode(body["pictures"][0]["data"], body["pictures"][0]["shape"], np.uint8)
-            ]
-            predictions = self.pipeline.recognize(image)[0]
+		def __init__(self):
+			self.queue_manager = QueueManager([self.__class__.__name__, "Interpreter"])
+			self.pipeline = keras_ocr.pipeline.Pipeline()
 
-            # Recomment this
-            # fig, axs = plt.subplots(nrows=len(image), figsize=(20, 20))
-            # keras_ocr.tools.drawAnnotations(image=image[0], predictions=predictions, ax=axs)
-            # plt.show()
+		def callback(self, body, **_):
+			image = [
+				decode(body["pictures"][0]["data"], body["pictures"][0]["shape"], np.uint8)
+			]
+			
+			attempt = 0
+			text = None
+			noSkewimages = []
+			noSkewimages.append(None)
 
 
-            pprint(predictions)
-            text = bb_to_text(predictions)
+			while (attempt < 4):
+				# ----- TODO: check syntax (either "image[0]" or simply "image") ------
+				# Skew correction (USELESS?)
+				noSkewimages[0] = rotate_image(image, -getSkewAngle(image))
+				# ---------------------------------------------------------------------
+					
+				predictions = self.pipeline.recognize(image)[0]
 
-            body["texts"] = text
-            body["path_done"].append(self.__class__.__name__)
-            del body["pictures"]
-            pprint(body)
-            next_service = body["vision_path"].pop(0)
-            self.queue_manager.publish(next_service, body)
+				"""fig, axs = plt.subplots(nrows=len(image), figsize=(20, 20))
+				keras_ocr.tools.drawAnnotations(image=image[0], predictions=predictions, ax=axs)
+				plt.show()"""
+				pprint(predictions)
+				
+				
+				# ------ APPROXIMATE CONFIDENCE RATING --------------------------------
+				rawText = bb_to_text(predictions, False)
+			
+				spell = SpellChecker()
+				nbTotalWords = 0;
+				nbCorrectWords = 0;
 
-            logger.info(f"{self.__class__.__name__} ready")
+				for j in range(0, len(rawText)):
+					nbTotalWords = nbTotalWords + len(rawText[j]);
+					nbCorrectWords = nbCorrectWords + len(spell.known(rawText[j]))
 
-        def run(self):
-            self.queue_manager.start_consuming(self.__class__.__name__, self.callback)
+				percentage = nbCorrectWords/nbTotalWords * 100
 
+				if( percentage < 50 ):
+					pprint("I cannot read this confidently, try reorientating the object.") # TODO: check use pprint or logger?
+					image = np.rot90(image) # This method prevent edges being cut during rotation
+					attempt = attempt + 1
+				else: 
+					pprint("Reading successfully.") # TODO: check use pprint or logger?
+					text = bb_to_text(predictions, True);
+					attempt = 4; # "while" exit condition
+				# ---------------------------------------------------------------------
+			
+
+			body["texts"] = text # TODO: take action if text value is None (via dialog manager?)
+			body["path_done"].append(self.__class__.__name__)
+			del body["pictures"]
+			pprint(body)
+			next_service = body["vision_path"].pop(0)
+			self.queue_manager.publish(next_service, body)
+
+			logger.info(f"{self.__class__.__name__} ready")
+
+		def run(self):
+			self.queue_manager.start_consuming(self.__class__.__name__, self.callback)
 
     elif (default_ocr_model == "tesseract"):
         def __init__(self):
